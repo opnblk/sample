@@ -9,13 +9,15 @@ import (
 	connmgr "github.com/libp2p/go-libp2p-connmgr"
 	"github.com/libp2p/go-libp2p-core/crypto"
 	"github.com/libp2p/go-libp2p-core/host"
+	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/libp2p/go-libp2p-core/routing"
+	discovery "github.com/libp2p/go-libp2p-discovery"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	noise "github.com/libp2p/go-libp2p-noise"
 	libp2ptls "github.com/libp2p/go-libp2p-tls"
 )
 
-func makeHost(ctx context.Context, listenPort int) (host.Host, error) {
+func makeHost(ctx context.Context, listenPort int) (host.Host, *discovery.RoutingDiscovery, error) {
 
 	priv, _, err := crypto.GenerateKeyPair(
 		crypto.Ed25519, // Select your key type. Ed25519 are nice short
@@ -78,14 +80,18 @@ func makeHost(ctx context.Context, listenPort int) (host.Host, error) {
 	// this is an example and the peer will die as soon as it finishes, so
 	// it is unnecessary to put strain on the network.
 
-	/*
-		// This connects to public bootstrappers
-		for _, addr := range dht.DefaultBootstrapPeers {
-			pi, _ := peer.AddrInfoFromP2pAddr(addr)
-			// We ignore errors as some bootstrap peers may be down
-			// and that is fine.
-			h2.Connect(ctx, *pi)
-		}
-	*/
-	return ha, err
+	// This connects to public bootstrappers
+	for _, addr := range dht.DefaultBootstrapPeers {
+		pi, _ := peer.AddrInfoFromP2pAddr(addr)
+		// We ignore errors as some bootstrap peers may be down
+		// and that is fine.
+		ha.Connect(ctx, *pi)
+	}
+
+	logger.Info("Announcing ourselves...")
+	routingDiscovery := discovery.NewRoutingDiscovery(idht)
+	discovery.Advertise(ctx, routingDiscovery, meetingPoint)
+	logger.Info("Successfully announced!")
+
+	return ha, routingDiscovery, err
 }

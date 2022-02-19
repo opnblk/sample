@@ -36,7 +36,7 @@ func main1() {
 	}
 
 	// Make a host that listens on the given multiaddress
-	ha, err := makeHost(ctx, *listenF)
+	ha, _, err := makeHost(ctx, *listenF)
 	if err != nil {
 		log.Fatal(err)
 	}
