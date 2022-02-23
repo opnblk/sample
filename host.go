@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
+	"io"
 	"time"
+
+	mrand "math/rand"
 
 	"github.com/libp2p/go-libp2p"
 	connmgr "github.com/libp2p/go-libp2p-connmgr"
@@ -17,21 +21,19 @@ import (
 	libp2ptls "github.com/libp2p/go-libp2p-tls"
 )
 
-func makeHost(ctx context.Context, listenPort int) (host.Host, *discovery.RoutingDiscovery, error) {
-
-	priv, _, err := crypto.GenerateKeyPair(
-		crypto.Ed25519, // Select your key type. Ed25519 are nice short
-		-1,             // Select key length when possible (i.e. RSA).
-	)
-	if err != nil {
-		panic(err)
+func IfThen(condition bool, a interface{}) interface{} {
+	if condition {
+		return a
 	}
+	return nil
+}
 
-	var idht *dht.IpfsDHT
+func makeHost(ctx context.Context, listenPort int, randseed int64, peerAddr string) (host.Host, *discovery.RoutingDiscovery) {
+	privateKey, _ := generateKeyPair(randseed)
 
-	ha, err := libp2p.New(
+	opts := []libp2p.Option{
 		// Use the keypair we generated
-		libp2p.Identity(priv),
+		libp2p.Identity(privateKey),
 		// Multiple listen addresses
 		libp2p.ListenAddrStrings(
 			fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", listenPort),
@@ -52,46 +54,71 @@ func makeHost(ctx context.Context, listenPort int) (host.Host, *discovery.Routin
 			400,         // HighWater,
 			time.Minute, // GracePeriod
 		)),
-		// Attempt to open ports using uPNP for NATed hosts.
-		libp2p.NATPortMap(),
 		// Let this host use the DHT to find other hosts
 		libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
-			idht, err = dht.New(ctx, h)
+			idht, err := dht.New(ctx, h)
 			return idht, err
 		}),
-		// Let this host use relays and advertise itself on relays if
-		// it finds it is behind NAT. Use libp2p.Relay(options...) to
-		// enable active relays and more.
-		libp2p.EnableAutoRelay(),
-		// If you want to help other peers to figure out if they are behind
-		// NATs, you can launch the server-side of AutoNAT too (AutoRelay
-		// already runs the client)
-		//
-		// This service is highly rate-limited and should not cause any
-		// performance issues.
-		libp2p.EnableNATService(),
-	)
+	}
+
+	// Attempt to open ports using uPNP for NATed hosts.
+	IfThen(prod, append(opts, libp2p.NATPortMap()))
+
+	// Let this host use relays and advertise itself on relays if
+	// it finds it is behind NAT. Use libp2p.Relay(options...) to
+	// enable active relays and more.
+	IfThen(prod, append(opts, libp2p.EnableAutoRelay()))
+
+	// If you want to help other peers to figure out if they are behind
+	// NATs, you can launch the server-side of AutoNAT too (AutoRelay
+	// already runs the client)
+	//
+	// This service is highly rate-limited and should not cause any
+	// performance issues.
+	IfThen(prod, append(opts, libp2p.EnableNATService()))
+
+	//var idht *dht.IpfsDHT
+
+	ha, err := libp2p.New(opts...)
+
 	if err != nil {
 		panic(err)
 	}
 
-	// The last step to get fully up and running would be to connect to
-	// bootstrap peers (or any other peers). We leave this commented as
-	// this is an example and the peer will die as soon as it finishes, so
-	// it is unnecessary to put strain on the network.
-
-	// This connects to public bootstrappers
-	for _, addr := range dht.DefaultBootstrapPeers {
-		pi, _ := peer.AddrInfoFromP2pAddr(addr)
-		// We ignore errors as some bootstrap peers may be down
-		// and that is fine.
+	if peerAddr != "" {
+		logger.Info("Bootstrap multi address=", peerAddr)
+		pi, err := peer.AddrInfoFromString(peerAddr)
+		if err != nil {
+			panic(err)
+		}
 		ha.Connect(ctx, *pi)
 	}
 
-	logger.Info("Announcing ourselves...")
-	routingDiscovery := discovery.NewRoutingDiscovery(idht)
-	discovery.Advertise(ctx, routingDiscovery, meetingPoint)
-	logger.Info("Successfully announced!")
+	/*
+		logger.Info("Announcing ourselves...")
+		routingDiscovery := discovery.NewRoutingDiscovery(idht)
+		discovery.Advertise(ctx, routingDiscovery, meetingPoint)
+		logger.Info("Successfully announced!")
+	*/
+	return ha, routingDiscovery
+}
 
-	return ha, routingDiscovery, err
+func generateKeyPair(randseed int64) (crypto.PrivKey, crypto.PubKey) {
+	// If the seed is zero, use real cryptographic randomness. Otherwise, use a
+	// deterministic randomness source to make generated keys stay the same
+	// across multiple runs
+	var r io.Reader
+	if randseed == 0 {
+		r = rand.Reader
+	} else {
+		r = mrand.New(mrand.NewSource(randseed))
+	}
+
+	// Generate a key pair for this host. We will use it at least
+	// to obtain a valid host ID.
+	privateKey, publicKey, err := crypto.GenerateKeyPairWithReader(crypto.RSA, 2048, r)
+	if err != nil {
+		panic(err)
+	}
+	return privateKey, publicKey
 }
